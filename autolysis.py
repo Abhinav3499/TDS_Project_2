@@ -5,6 +5,8 @@ import seaborn as sns
 import matplotlib.pyplot as plt
 import requests
 import argparse
+import numpy as np
+from scipy.stats import skew, kurtosis
 
 # Ensure environment variable for AI Proxy Token is set
 AIPROXY_TOKEN = os.environ.get("AIPROXY_TOKEN")
@@ -53,13 +55,33 @@ def analyze_dataset(csv_filename, output_dir):
         "num_columns": len(df.columns),
         "columns": df.dtypes.to_dict(),
         "missing_values": df.isnull().sum().to_dict(),
-        "sample_data": df.head(5).to_dict()
+        "sample_data": df.head(5).to_dict(),
+        "duplicates": df.duplicated().sum()
     }
 
-    # Filter numerical columns
+    # Detect numerical columns
     numerical_cols = df.select_dtypes(include="number").columns
     if len(numerical_cols) > 0:
-        # Generate correlation matrix for numerical columns
+        # Advanced metrics
+        summary["numerical_metrics"] = {
+            col: {
+                "mean": df[col].mean(),
+                "std_dev": df[col].std(),
+                "min": df[col].min(),
+                "max": df[col].max(),
+                "skewness": skew(df[col].dropna()),
+                "kurtosis": kurtosis(df[col].dropna())
+            }
+            for col in numerical_cols
+        }
+
+        # Detect outliers using Z-score
+        z_scores = np.abs((df[numerical_cols] - df[numerical_cols].mean()) / df[numerical_cols].std())
+        summary["outliers"] = {
+            col: (z_scores[col] > 3).sum() for col in numerical_cols
+        }
+
+        # Generate correlation matrix
         correlation_matrix = df[numerical_cols].corr()
         sns.heatmap(correlation_matrix, annot=True, cmap="coolwarm")
         plt.title("Correlation Matrix")
@@ -87,6 +109,15 @@ def analyze_dataset(csv_filename, output_dir):
     else:
         print("No numerical columns available for analysis.")
 
+    # Detect categorical columns
+    categorical_cols = df.select_dtypes(include="object").columns
+    if len(categorical_cols) > 0:
+        # Generate a bar plot for the first categorical column
+        sns.countplot(y=df[categorical_cols[0]].dropna(), order=df[categorical_cols[0]].value_counts().index)
+        plt.title(f"Bar Chart for {categorical_cols[0]}")
+        plt.savefig(os.path.join(output_dir, "bar_chart.png"))
+        plt.close()
+
     # Missing data heatmap
     sns.heatmap(df.isnull(), cbar=False, cmap="viridis")
     plt.title("Missing Values Heatmap")
@@ -104,8 +135,13 @@ def generate_readme(data_summary, analysis_narrative, output_dir):
 ## Dataset Summary
 - Number of Rows: {num_rows}
 - Number of Columns: {num_columns}
+- Duplicate Rows: {duplicates}
+
 ### Columns and Data Types:
 {columns}
+
+### Numerical Metrics:
+{numerical_metrics}
 
 ## Analysis Narrative
 {narrative}
@@ -121,10 +157,17 @@ def generate_readme(data_summary, analysis_narrative, output_dir):
 ![Pair Plot](pair_plot.png)
 5. Missing Values Heatmap:
 ![Missing Values Heatmap](missing_values_heatmap.png)
+6. Bar Chart (Categorical Column):
+![Bar Chart](bar_chart.png)
 """.format(
         num_rows=data_summary['num_rows'],
         num_columns=data_summary['num_columns'],
+        duplicates=data_summary['duplicates'],
         columns="\n".join([f"- {col}: {dtype}" for col, dtype in data_summary["columns"].items()]),
+        numerical_metrics="\n".join([
+            f"- {col}: Mean={metrics['mean']}, Std Dev={metrics['std_dev']}, Min={metrics['min']}, Max={metrics['max']}, Skewness={metrics['skewness']}, Kurtosis={metrics['kurtosis']}"
+            for col, metrics in data_summary.get("numerical_metrics", {}).items()
+        ]),
         narrative=analysis_narrative
     )
 
@@ -150,7 +193,7 @@ def main():
     print("Generating narrative using LLM...")
     llm_messages = [
         {"role": "system", "content": "You are a data analyst."},
-        {"role": "user", "content": f"Here is a summary of the dataset: {data_summary}. Provide brief and meaningful analysis and insights."}
+        {"role": "user", "content": f"Here is a summary of the dataset: {data_summary}. Provide advanced insights, key findings, and potential improvements."}
     ]
     analysis_narrative = query_llm(llm_messages)
 
