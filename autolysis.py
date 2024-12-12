@@ -36,7 +36,7 @@ def query_llm(messages, temperature=0.7, max_tokens=500):
         print(f"Error querying LLM: {response.status_code}\n{response.text}")
         exit(1)
 
-def analyze_dataset(csv_filename):
+def analyze_dataset(csv_filename, output_dir):
     """
     Perform basic analysis on the dataset and return a summary.
     """
@@ -63,38 +63,73 @@ def analyze_dataset(csv_filename):
         correlation_matrix = df[numerical_cols].corr()
         sns.heatmap(correlation_matrix, annot=True, cmap="coolwarm")
         plt.title("Correlation Matrix")
-        plt.savefig("correlation_matrix.png")
+        plt.savefig(os.path.join(output_dir, "correlation_matrix.png"))
         plt.close()
 
         # Generate a distribution plot for the first numerical column
         sns.histplot(df[numerical_cols[0]].dropna(), kde=True, color="blue")
         plt.title(f"Distribution of {numerical_cols[0]}")
-        plt.savefig("distribution_plot.png")
+        plt.savefig(os.path.join(output_dir, "distribution_plot.png"))
+        plt.close()
+
+        # Generate a scatter plot for the first two numerical columns (if available)
+        if len(numerical_cols) > 1:
+            sns.scatterplot(x=df[numerical_cols[0]], y=df[numerical_cols[1]])
+            plt.title(f"Scatter Plot: {numerical_cols[0]} vs {numerical_cols[1]}")
+            plt.savefig(os.path.join(output_dir, "scatter_plot.png"))
+            plt.close()
+
+        # Generate a pair plot for numerical columns
+        sns.pairplot(df[numerical_cols])
+        plt.suptitle("Pair Plot for Numerical Columns", y=1.02)
+        plt.savefig(os.path.join(output_dir, "pair_plot.png"))
         plt.close()
     else:
-        print("No numerical columns available for correlation or distribution analysis.")
+        print("No numerical columns available for analysis.")
+
+    # Missing data heatmap
+    sns.heatmap(df.isnull(), cbar=False, cmap="viridis")
+    plt.title("Missing Values Heatmap")
+    plt.savefig(os.path.join(output_dir, "missing_values_heatmap.png"))
+    plt.close()
 
     return summary
 
-def generate_readme(data_summary, analysis_narrative):
+def generate_readme(data_summary, analysis_narrative, output_dir):
     """
     Generate README.md with analysis narrative and references to charts.
     """
-    with open("README.md", "w") as f:
-        f.write("# Automated Dataset Analysis\n\n")
-        f.write("## Dataset Summary\n")
-        f.write(f"- Number of Rows: {data_summary['num_rows']}\n")
-        f.write(f"- Number of Columns: {data_summary['num_columns']}\n")
-        f.write("### Columns and Data Types:\n")
-        for col, dtype in data_summary["columns"].items():
-            f.write(f"- {col}: {dtype}\n")
-        f.write("\n## Analysis Narrative\n")
-        f.write(analysis_narrative)
-        f.write("\n## Visualizations\n")
-        f.write("1. Correlation Matrix:\n")
-        f.write("![Correlation Matrix](correlation_matrix.png)\n")
-        f.write("2. Distribution Plot:\n")
-        f.write("![Distribution Plot](distribution_plot.png)\n")
+    readme_content = """# Automated Dataset Analysis
+
+## Dataset Summary
+- Number of Rows: {num_rows}
+- Number of Columns: {num_columns}
+### Columns and Data Types:
+{columns}
+
+## Analysis Narrative
+{narrative}
+
+## Visualizations
+1. Correlation Matrix:
+![Correlation Matrix](correlation_matrix.png)
+2. Distribution Plot:
+![Distribution Plot](distribution_plot.png)
+3. Scatter Plot:
+![Scatter Plot](scatter_plot.png)
+4. Pair Plot:
+![Pair Plot](pair_plot.png)
+5. Missing Values Heatmap:
+![Missing Values Heatmap](missing_values_heatmap.png)
+""".format(
+        num_rows=data_summary['num_rows'],
+        num_columns=data_summary['num_columns'],
+        columns="\n".join([f"- {col}: {dtype}" for col, dtype in data_summary["columns"].items()]),
+        narrative=analysis_narrative
+    )
+
+    with open(os.path.join(output_dir, "README.md"), "w") as f:
+        f.write(readme_content)
 
 def main():
     # Parse command-line arguments
@@ -102,21 +137,26 @@ def main():
     parser.add_argument("csv_filename", help="Path to the CSV file to analyze")
     args = parser.parse_args()
 
+    # Create output directory
+    dataset_name = os.path.splitext(os.path.basename(args.csv_filename))[0]
+    output_dir = os.path.join(os.getcwd(), dataset_name)
+    os.makedirs(output_dir, exist_ok=True)
+
     # Step 1: Analyze the dataset
     print("Analyzing dataset...")
-    data_summary = analyze_dataset(args.csv_filename)
+    data_summary = analyze_dataset(args.csv_filename, output_dir)
 
     # Step 2: Query LLM for narrative
     print("Generating narrative using LLM...")
     llm_messages = [
         {"role": "system", "content": "You are a data analyst."},
-        {"role": "user", "content": f"Here is a summary of the dataset: {data_summary}. Provide an analysis and insights."}
+        {"role": "user", "content": f"Here is a summary of the dataset: {data_summary}. Provide brief and meaningful analysis and insights."}
     ]
     analysis_narrative = query_llm(llm_messages)
 
     # Step 3: Generate README.md
     print("Creating README.md...")
-    generate_readme(data_summary, analysis_narrative)
+    generate_readme(data_summary, analysis_narrative, output_dir)
 
     print("Analysis complete. Check README.md and the generated charts.")
 
