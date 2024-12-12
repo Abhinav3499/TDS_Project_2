@@ -5,8 +5,6 @@ import seaborn as sns
 import matplotlib.pyplot as plt
 import requests
 import argparse
-import numpy as np
-from scipy.stats import skew, kurtosis
 
 # Ensure environment variable for AI Proxy Token is set
 AIPROXY_TOKEN = os.environ.get("AIPROXY_TOKEN")
@@ -22,9 +20,7 @@ HEADERS = {
 }
 
 def query_llm(messages, temperature=0.7, max_tokens=500):
-    """
-    Query the LLM via AI Proxy.
-    """
+    """ Query the LLM via AI Proxy. """
     payload = {
         "model": "gpt-4o-mini",
         "messages": messages,
@@ -38,19 +34,8 @@ def query_llm(messages, temperature=0.7, max_tokens=500):
         print(f"Error querying LLM: {response.status_code}\n{response.text}")
         exit(1)
 
-def validate_file_existence(file_path, required_files):
-    """
-    Ensure required files exist in the given path.
-    """
-    missing_files = [f for f in required_files if not os.path.exists(os.path.join(file_path, f))]
-    if missing_files:
-        print(f"Missing files: {missing_files}")
-        exit(1)
-
 def analyze_dataset(csv_filename, output_dir):
-    """
-    Perform basic analysis on the dataset and return a summary.
-    """
+    """ Perform basic analysis on the dataset and return a summary. """
     try:
         # Load the dataset
         df = pd.read_csv(csv_filename, encoding="ISO-8859-1")
@@ -64,33 +49,14 @@ def analyze_dataset(csv_filename, output_dir):
         "num_columns": len(df.columns),
         "columns": df.dtypes.to_dict(),
         "missing_values": df.isnull().sum().to_dict(),
-        "sample_data": df.head(5).to_dict(),
-        "duplicates": df.duplicated().sum()
+        "sample_data": df.head(5).to_dict()
     }
 
-    # Detect numerical columns
+    # Filter numerical columns
     numerical_cols = df.select_dtypes(include="number").columns
+
     if len(numerical_cols) > 0:
-        # Advanced metrics
-        summary["numerical_metrics"] = {
-            col: {
-                "mean": df[col].mean(),
-                "std_dev": df[col].std(),
-                "min": df[col].min(),
-                "max": df[col].max(),
-                "skewness": skew(df[col].dropna()),
-                "kurtosis": kurtosis(df[col].dropna())
-            }
-            for col in numerical_cols
-        }
-
-        # Detect outliers using Z-score
-        z_scores = np.abs((df[numerical_cols] - df[numerical_cols].mean()) / df[numerical_cols].std())
-        summary["outliers"] = {
-            col: (z_scores[col] > 3).sum() for col in numerical_cols
-        }
-
-        # Generate correlation matrix
+        # Generate correlation matrix for numerical columns
         correlation_matrix = df[numerical_cols].corr()
         sns.heatmap(correlation_matrix, annot=True, cmap="coolwarm")
         plt.title("Correlation Matrix")
@@ -118,15 +84,6 @@ def analyze_dataset(csv_filename, output_dir):
     else:
         print("No numerical columns available for analysis.")
 
-    # Detect categorical columns
-    categorical_cols = df.select_dtypes(include="object").columns
-    if len(categorical_cols) > 0:
-        # Generate a bar plot for the first categorical column
-        sns.countplot(y=df[categorical_cols[0]].dropna(), order=df[categorical_cols[0]].value_counts().index)
-        plt.title(f"Bar Chart for {categorical_cols[0]}")
-        plt.savefig(os.path.join(output_dir, "bar_chart.png"))
-        plt.close()
-
     # Missing data heatmap
     sns.heatmap(df.isnull(), cbar=False, cmap="viridis")
     plt.title("Missing Values Heatmap")
@@ -136,47 +93,29 @@ def analyze_dataset(csv_filename, output_dir):
     return summary
 
 def generate_readme(data_summary, analysis_narrative, output_dir):
-    """
-    Generate README.md with analysis narrative and references to charts.
-    """
+    """ Generate README.md with analysis narrative and references to charts. """
     readme_content = """# Automated Dataset Analysis
 
 ## Dataset Summary
 - Number of Rows: {num_rows}
 - Number of Columns: {num_columns}
-- Duplicate Rows: {duplicates}
 
 ### Columns and Data Types:
 {columns}
-
-### Numerical Metrics:
-{numerical_metrics}
 
 ## Analysis Narrative
 {narrative}
 
 ## Visualizations
-1. Correlation Matrix:
-![Correlation Matrix](correlation_matrix.png)
-2. Distribution Plot:
-![Distribution Plot](distribution_plot.png)
-3. Scatter Plot:
-![Scatter Plot](scatter_plot.png)
-4. Pair Plot:
-![Pair Plot](pair_plot.png)
-5. Missing Values Heatmap:
-![Missing Values Heatmap](missing_values_heatmap.png)
-6. Bar Chart (Categorical Column):
-![Bar Chart](bar_chart.png)
+1. Correlation Matrix: ![Correlation Matrix](correlation_matrix.png)
+2. Distribution Plot: ![Distribution Plot](distribution_plot.png)
+3. Scatter Plot: ![Scatter Plot](scatter_plot.png)
+4. Pair Plot: ![Pair Plot](pair_plot.png)
+5. Missing Values Heatmap: ![Missing Values Heatmap](missing_values_heatmap.png)
 """.format(
         num_rows=data_summary['num_rows'],
         num_columns=data_summary['num_columns'],
-        duplicates=data_summary['duplicates'],
         columns="\n".join([f"- {col}: {dtype}" for col, dtype in data_summary["columns"].items()]),
-        numerical_metrics="\n".join([
-            f"- {col}: Mean={metrics['mean']}, Std Dev={metrics['std_dev']}, Min={metrics['min']}, Max={metrics['max']}, Skewness={metrics['skewness']}, Kurtosis={metrics['kurtosis']}"
-            for col, metrics in data_summary.get("numerical_metrics", {}).items()
-        ]),
         narrative=analysis_narrative
     )
 
@@ -194,24 +133,20 @@ def main():
     output_dir = os.path.join(os.getcwd(), dataset_name)
     os.makedirs(output_dir, exist_ok=True)
 
-    # Step 1: Validate necessary files
-    print("Validating required files...")
-    required_files = ["README.md", "requirements.txt"]
-    validate_file_existence(os.getcwd(), required_files)
-
-    # Step 2: Analyze the dataset
+    # Step 1: Analyze the dataset
     print("Analyzing dataset...")
     data_summary = analyze_dataset(args.csv_filename, output_dir)
 
-    # Step 3: Query LLM for narrative
+    # Step 2: Query LLM for narrative
     print("Generating narrative using LLM...")
     llm_messages = [
         {"role": "system", "content": "You are a data analyst."},
-        {"role": "user", "content": f"Here is a summary of the dataset: {data_summary}. Provide advanced insights, key findings, and potential improvements."}
+        {"role": "user", "content": f"Here is a summary of the dataset: {data_summary}. Provide brief and meaningful analysis and insights."}
     ]
+    
     analysis_narrative = query_llm(llm_messages)
 
-    # Step 4: Generate README.md
+    # Step 3: Generate README.md
     print("Creating README.md...")
     generate_readme(data_summary, analysis_narrative, output_dir)
 
