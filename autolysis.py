@@ -21,7 +21,7 @@ HEADERS = {
     "Authorization": f"Bearer {AIPROXY_TOKEN}"
 }
 
-def query_llm(messages, temperature=0.7, max_tokens=1000):
+def query_llm(messages, temperature=0.7, max_tokens=500):
     """
     Query the LLM via AI Proxy.
     """
@@ -36,6 +36,15 @@ def query_llm(messages, temperature=0.7, max_tokens=1000):
         return response.json()["choices"][0]["message"]["content"]
     else:
         print(f"Error querying LLM: {response.status_code}\n{response.text}")
+        exit(1)
+
+def validate_file_existence(file_path, required_files):
+    """
+    Ensure required files exist in the given path.
+    """
+    missing_files = [f for f in required_files if not os.path.exists(os.path.join(file_path, f))]
+    if missing_files:
+        print(f"Missing files: {missing_files}")
         exit(1)
 
 def analyze_dataset(csv_filename, output_dir):
@@ -88,11 +97,17 @@ def analyze_dataset(csv_filename, output_dir):
         plt.savefig(os.path.join(output_dir, "correlation_matrix.png"))
         plt.close()
 
-        # Generate a distribution plot for all numerical columns
-        for col in numerical_cols:
-            sns.histplot(df[col].dropna(), kde=True, color="blue")
-            plt.title(f"Distribution of {col}")
-            plt.savefig(os.path.join(output_dir, f"distribution_{col}.png"))
+        # Generate a distribution plot for the first numerical column
+        sns.histplot(df[numerical_cols[0]].dropna(), kde=True, color="blue")
+        plt.title(f"Distribution of {numerical_cols[0]}")
+        plt.savefig(os.path.join(output_dir, "distribution_plot.png"))
+        plt.close()
+
+        # Generate a scatter plot for the first two numerical columns (if available)
+        if len(numerical_cols) > 1:
+            sns.scatterplot(x=df[numerical_cols[0]], y=df[numerical_cols[1]])
+            plt.title(f"Scatter Plot: {numerical_cols[0]} vs {numerical_cols[1]}")
+            plt.savefig(os.path.join(output_dir, "scatter_plot.png"))
             plt.close()
 
         # Generate a pair plot for numerical columns
@@ -106,11 +121,11 @@ def analyze_dataset(csv_filename, output_dir):
     # Detect categorical columns
     categorical_cols = df.select_dtypes(include="object").columns
     if len(categorical_cols) > 0:
-        for col in categorical_cols:
-            sns.countplot(y=df[col].dropna(), order=df[col].value_counts().index)
-            plt.title(f"Bar Chart for {col}")
-            plt.savefig(os.path.join(output_dir, f"bar_chart_{col}.png"))
-            plt.close()
+        # Generate a bar plot for the first categorical column
+        sns.countplot(y=df[categorical_cols[0]].dropna(), order=df[categorical_cols[0]].value_counts().index)
+        plt.title(f"Bar Chart for {categorical_cols[0]}")
+        plt.savefig(os.path.join(output_dir, "bar_chart.png"))
+        plt.close()
 
     # Missing data heatmap
     sns.heatmap(df.isnull(), cbar=False, cmap="viridis")
@@ -124,32 +139,46 @@ def generate_readme(data_summary, analysis_narrative, output_dir):
     """
     Generate README.md with analysis narrative and references to charts.
     """
-    visualizations = "\n".join([
-        f"{i+1}. ![{viz}](./{viz})" for i, viz in enumerate(os.listdir(output_dir)) if viz.endswith('.png')
-    ])
-
-    readme_content = f"""# Automated Dataset Analysis
+    readme_content = """# Automated Dataset Analysis
 
 ## Dataset Summary
-- Number of Rows: {data_summary['num_rows']}
-- Number of Columns: {data_summary['num_columns']}
-- Duplicate Rows: {data_summary['duplicates']}
+- Number of Rows: {num_rows}
+- Number of Columns: {num_columns}
+- Duplicate Rows: {duplicates}
 
 ### Columns and Data Types:
-""" + "\n".join([f"- {col}: {dtype}" for col, dtype in data_summary["columns"].items()]) + f"""
+{columns}
 
 ### Numerical Metrics:
-""" + "\n".join([
-        f"- {col}: Mean={metrics['mean']}, Std Dev={metrics['std_dev']}, Min={metrics['min']}, Max={metrics['max']}, Skewness={metrics['skewness']}, Kurtosis={metrics['kurtosis']}"
-        for col, metrics in data_summary.get("numerical_metrics", {}).items()
-    ]) + f"""
+{numerical_metrics}
 
 ## Analysis Narrative
-{analysis_narrative}
+{narrative}
 
 ## Visualizations
-{visualizations}
-"""
+1. Correlation Matrix:
+![Correlation Matrix](correlation_matrix.png)
+2. Distribution Plot:
+![Distribution Plot](distribution_plot.png)
+3. Scatter Plot:
+![Scatter Plot](scatter_plot.png)
+4. Pair Plot:
+![Pair Plot](pair_plot.png)
+5. Missing Values Heatmap:
+![Missing Values Heatmap](missing_values_heatmap.png)
+6. Bar Chart (Categorical Column):
+![Bar Chart](bar_chart.png)
+""".format(
+        num_rows=data_summary['num_rows'],
+        num_columns=data_summary['num_columns'],
+        duplicates=data_summary['duplicates'],
+        columns="\n".join([f"- {col}: {dtype}" for col, dtype in data_summary["columns"].items()]),
+        numerical_metrics="\n".join([
+            f"- {col}: Mean={metrics['mean']}, Std Dev={metrics['std_dev']}, Min={metrics['min']}, Max={metrics['max']}, Skewness={metrics['skewness']}, Kurtosis={metrics['kurtosis']}"
+            for col, metrics in data_summary.get("numerical_metrics", {}).items()
+        ]),
+        narrative=analysis_narrative
+    )
 
     with open(os.path.join(output_dir, "README.md"), "w") as f:
         f.write(readme_content)
@@ -165,11 +194,16 @@ def main():
     output_dir = os.path.join(os.getcwd(), dataset_name)
     os.makedirs(output_dir, exist_ok=True)
 
-    # Step 1: Analyze the dataset
+    # Step 1: Validate necessary files
+    print("Validating required files...")
+    required_files = ["README.md", "requirements.txt"]
+    validate_file_existence(os.getcwd(), required_files)
+
+    # Step 2: Analyze the dataset
     print("Analyzing dataset...")
     data_summary = analyze_dataset(args.csv_filename, output_dir)
 
-    # Step 2: Query LLM for narrative
+    # Step 3: Query LLM for narrative
     print("Generating narrative using LLM...")
     llm_messages = [
         {"role": "system", "content": "You are a data analyst."},
@@ -177,7 +211,7 @@ def main():
     ]
     analysis_narrative = query_llm(llm_messages)
 
-    # Step 3: Generate README.md
+    # Step 4: Generate README.md
     print("Creating README.md...")
     generate_readme(data_summary, analysis_narrative, output_dir)
 
